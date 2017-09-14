@@ -1,0 +1,982 @@
+---
+title: "Wine Project"
+author: Vincent Shields
+output: 
+  html_document: 
+   toc: true
+   toc_depth: 3
+   toc_float: true
+ 
+---
+
+
+Predicting Wine Quality from Physicochemical Properties by Vincent Shields
+========================================================
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# Load all of the packages that you end up using in your analysis in this code
+# chunk.
+
+# Notice that the parameter "echo" was set to FALSE for this code chunk. This
+# prevents the code from displaying in the knitted HTML output. You should set
+# echo=FALSE for all code chunks in your file, unless it makes sense for your
+# report to show the code that generated a particular plot.
+
+# The other parameters for "message" and "warning" should also be set to FALSE
+# for other code chunks once you have verified that each plot comes out as you
+# want it to. This will clean up the flow of your report.
+
+# Load necessary packages 
+
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(AER)
+library(stargazer)
+library(sandwich)
+library(QuantPsyc)
+
+# Turn off scientific notation except for big numbers
+
+options(scipen = 9)
+
+# function to calculate corrected SEs for OLS regression 
+cse = function(reg) {
+  rob = sqrt(diag(vcovHC(reg, type = "HC1")))
+  return(rob)
+}
+
+# Function to create reisling scale variables
+scale_IRF <- function(ratio_scale, pH) {
+    if(ratio_scale=="Dry") {
+      if (pH > 3.5){
+        "Medium Sweet"
+     }
+     
+      
+      else if (pH >=3.3 & (pH < 3.5)){
+       "Medium Dry"
+     }
+     
+      else{
+        "Dry"
+      }
+    }
+   
+  else if(ratio_scale=="Medium Dry") {
+     if (pH >=3.3){
+       "Medium Sweet"
+     }
+     else if (pH <= 2.9){
+        "Dry"
+     }
+      else{
+        "Medium Dry"
+      }
+    }
+  
+  else if(ratio_scale=="Medium Sweet") {
+     if (pH >=3.3){
+       "Sweet"
+     }
+     else if ((pH <= 2.9) & (pH > 2.8)){
+        "Medium Dry"
+     }
+    else if (pH <= 2.8){
+        "Dry"
+     }
+      else{
+        "Medium Sweet"
+      }
+  }
+
+  else if(ratio_scale=="Sweet") {
+     if ((pH <= 2.9) & (pH > 2.8)){
+        "Medium Sweet"
+     }
+    else if (pH <= 2.8){
+        "Medium Dry"
+     }
+      else{
+        "Sweet"
+      }
+  }
+  
+  else{
+    "N/A"
+  }
+}
+
+```
+
+```{r echo=FALSE, Load_the_Data}
+# Load the Data
+setwd("~/Desktop/wines")
+wine <- read.csv('wineQualityReds.csv')
+winew <- read.csv('wineQualityWhites.csv')
+
+# some data wrangling/cleaning
+
+total <- rbind(wine, winew)
+wine$quality_fac <- factor(wine$quality)
+winew$quality_fac <- factor(winew$quality)
+winew$reisling_scale = winew$residual.sugar / (winew$volatile.acidity + 
+                                  winew$fixed.acidity + winew$citric.acid)
+
+winew$reisling_category <- cut(winew$reisling_scale, 
+breaks = c(0,1,2,4,8), labels = c("Dry", "Medium Dry", "Medium Sweet", 
+                                  "Sweet"), right = FALSE)
+
+winew$scale <- mapply(scale_IRF, winew$reisling_category, winew$pH)
+wine$quality_num = as.numeric(wine$quality)
+total$quality_num = as.numeric(total$quality)
+winew$quality_num = as.numeric(winew$quality)
+total$X <- NULL
+wine$X <- NULL
+winew$X <- NULL
+```
+
+> The datasets used in this project were first used in a study by [Cortez et al., 2009], and later were made publicly available. The two datasets are related to red and white variants of the Portuguese "Vinho Verde" wine.
+The authors of the study request that their work be cited:
+  P. Cortez, A. Cerdeira, F. Almeida, T. Matos and J. Reis. 
+  Modeling wine preferences by data mining from physicochemical properties.
+  In Decision Support Systems, Elsevier, 47(4):547-553. ISSN: 0167-9236. 
+A more comprensive works cited will be provided as a text file with this submission.The chemical data were obtained through objective tests, and the output variable (Quality) was based on sensory data recorded by wine tasting profesionals (median of at least 3 evaluations). The Quality ranges from 0 (very bad), to 10 (excellent), but as you will see, no wines were rated zero or ten. I will provide the text file that the original authors of the study provide to describe each variable specifically. Lets dive deeper into the data to get a better sense of what is going on.
+
+# Univariate Plots Section 
+
+
+```{r echo=FALSE, Univariate_Plots}
+str(total)
+```
+
+```{r echo=FALSE}
+summary(total)
+```
+
+The combined red wine and white wine dataset consists of 6497 observations and 12 original variables. The red wine dataset consists
+of 1599 observations and the white wine dataset contains 4898 observations. The quality_num variable was created by converting the 
+variable quality to a numeric type for the sake of certain visualizations. A new factor variable was also created for the white wine
+dataset, based on sweetness parameters from the Reisling sugar guidlines. This will be explianed in more detail later. Now lets look at some variable distributions.
+
+```{r echo = FALSE, warning=FALSE, message=FALSE}
+library(gridExtra)
+
+h1 <- ggplot(aes(x = as.factor(quality)), data = wine)+
+       geom_bar() +
+  ggtitle("Red Wine") +
+  xlab("Quality rating")
+
+h2 <- ggplot(aes(x = as.factor(quality)), data = winew)+
+       geom_bar() +
+  ggtitle("White Wine") +
+  xlab("Quality rating")
+
+grid.arrange(h1,h2,ncol = 2)
+
+```
+
+```{r echo = FALSE}
+summary(total$quality)
+```
+
+```{r echo = FALSE}
+table(total$quality)
+```
+In the variable descriptions text, the authors state that, "The classes are ordered and not balanced (e.g. there are munch more normal wines than excellent or poor ones)." Looking at the distribution of quality for white and red wine, this appears to be true.
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+h1 <- ggplot(aes(x = volatile.acidity), data = wine) + 
+  geom_histogram( binwidth = 0.01) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x = volatile.acidity), data = winew) + 
+  geom_histogram(binwidth = 0.01) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+```
+
+
+
+```{r echo=FALSE}
+print("Red Wine Volatile Acidity")
+summary(wine$volatile.acidity)
+```
+
+```{r echo=FALSE}
+print("White Wine Volatile Acidity")
+summary(winew$volatile.acidity)
+```
+
+The distribution of volatile acidity appears bimodal for red wine and positively skewed for white wine. Red wine contains more 
+volatile acidity on average than white wine. I wonder if we could get a better sense of the spread by utilizing a boxplot visual. This could give us a better sense of the outliers.
+
+```{r echo = FALSE, out.height=600, out.width=1200}
+ b1 <- ggplot(wine, aes(y = volatile.acidity, x = 1)) +
+  geom_boxplot(color = 'blue') +
+  geom_jitter(aes(x = 1, y = volatile.acidity), alpha = 0.3) +
+  labs(y = 'Volatile Acidity', x = '',
+          title = "Volatile acidity distribution (red wine)") +
+  coord_flip()
+
+b2 <- ggplot(winew, aes(y = volatile.acidity, x = 1)) +
+  geom_boxplot(color = 'blue') +
+  geom_jitter(aes(x = 1, y = volatile.acidity), alpha = 1/15) +
+  labs(y = 'Volatile Acidity', x = '',
+          title = "Volatile acidity distribution (white wine)") +
+  coord_flip()
+
+
+grid.arrange(b1, b2)
+```
+
+The distribution for red wine appears to have more variance than white wine. There was a lot of datapoints overlapping inside of the quartile range for white wine, so the alpha parameter is smaller for the white wine distribution.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+h1 <- ggplot(aes(x = alcohol), data = wine) + 
+  geom_histogram(binwidth = 0.1) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x = alcohol), data = winew) + 
+  geom_histogram(binwidth = 0.1) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+  
+```
+
+The distribution of percent alcohol by volume appears to be positively skewed for red wine and almost bimodal for white wine, but 
+not quite. The median % alcohol is 10.20 for red wine and 10.40 for white wine. It is interesting that red and white wines have 
+similar median values for alcohol, but quite a large difference for volatile acidity.
+
+```{r echo = FALSE}
+
+print("Red Wine Alcohol by Volume")
+summary(wine$alcohol)
+
+```
+
+```{r echo = FALSE}
+
+print("White Wine Alcohol by Volume")
+summary(winew$alcohol)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+h1 <- ggplot(aes(x = total.sulfur.dioxide), data = wine) + 
+  geom_histogram(binwidth = 5) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x = total.sulfur.dioxide), data = winew) + 
+  geom_histogram(binwidth = 10) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+  
+```
+
+```{r echo = FALSE}
+
+print("Red Wine Total Sulfur Dioxide")
+summary(wine$total.sulfur.dioxide)
+
+```
+
+```{r echo = FALSE}
+
+print("White Wine Total Sulfur Dioxide")
+summary(winew$total.sulfur.dioxide)
+
+```
+
+White wines appear to have a normal distribution of total sulfur dioxide. For red wine, the distribution of total sulfur dioxide is positively skewed. White wines have more than double the amount of sulfur dioxide than red wines on average. Before looking at acidity and suflur dioxide in more detail, I wonder what the distribution looks like for the categorical variable representing the reisling sugar guidlines I created.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplot(aes(x = scale), data = winew) +
+  geom_histogram(stat = "count")
+
+```
+
+This plot displays the count of the different levels from the variable "Scale". This variable represents the Riesling Sugar Guidlines, set by the International Riesling foundation. Reisling is a white grape variety commonly used in white wines, so this variable was only 
+created in the white wine dataset. The Reisling grape variety is said to have high levels of acidity, however it appears that red wine has more volatile acidity on average. I wonder if there are other variables present in white wine that affect volatile acidity, or if purple grapes are simply more acidic in general. The Reisling sugar guidlines are based on the amount of acidity, residual
+sugar, and ph levels in the wine. Here is the chart for reference:
+![alt text](http://www.drinkriesling.com/wp-content/uploads/2008/11/irf-balance-table-41809-med.jpg)
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+print("Reisling scale count")
+table(winew$scale)
+```
+
+Most white wines fall under the "Dry" category on the reisling scale. It will be interesting to see if there is any relationship between these levels and the output variable quality.
+
+*********************************************************************************************************************
+
+###Other Variables
+
+```{r echo=FALSE}
+h1 <- ggplot(aes(x = citric.acid), data = wine) + 
+  geom_histogram(binwidth = 0.02) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x =  citric.acid), data = winew) + 
+  geom_histogram(binwidth = 0.02) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+```
+
+The distribution for citric acid appears somewhat bimodal for red wine and normal for white wine.
+
+```{r echo=FALSE}
+h1 <- ggplot(aes(x = fixed.acidity), data = wine) + 
+  geom_histogram(binwidth = 0.2) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x = fixed.acidity), data = winew) + 
+  geom_histogram(binwidth = 0.2) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+```
+
+
+Both distributions of fixed acidity appear slightly positively skewed, but almost normal.
+
+
+```{r echo=FALSE}
+h1 <- ggplot(aes(x = residual.sugar), data = wine) + 
+  geom_histogram(binwidth = 0.5) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x =  residual.sugar), data = winew) + 
+  geom_histogram(binwidth = 1) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+```
+
+Both distributions for residual sugar appear positively skewed.
+
+```{r echo=FALSE}
+h1 <- ggplot(aes(x = chlorides), data = wine) + 
+  geom_histogram(binwidth = 0.01) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x =  chlorides), data = winew) + 
+  geom_histogram(binwidth = 0.01) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+```
+
+Again we see two distributions that appear positively skewed, but the distribution of chlorides for red wine looks like it could be almost considered normal
+
+```{r echo=FALSE}
+h1 <- ggplot(aes(x = free.sulfur.dioxide), data = wine) + 
+  geom_histogram(binwidth = 1) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x =  free.sulfur.dioxide), data = winew) + 
+  geom_histogram(binwidth = 5) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+```
+
+The distribution of free sulfur dioxide for red and white wine appear positively skewed. I wonder why so many of the distributions appear positively skewed.
+
+```{r echo=FALSE}
+h1 <- ggplot(aes(x = density), data = wine) + 
+  geom_histogram(binwidth = 0.0002) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x =  density), data = winew) + 
+  geom_histogram(binwidth = 0.0005) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+```
+
+Finally we see some distributions that look a little different. The distribution of density (measured in g/cm^3) appears normal for both red and white wine. The distribution for white wine, however, looks clustered towards the left.
+
+```{r echo=FALSE}
+h1 <- ggplot(aes(x = pH), data = wine) + 
+  geom_histogram(binwidth = 0.01) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x =  pH), data = winew) + 
+  geom_histogram(binwidth = 0.01) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+```
+
+The distribution of pH for both red and white wine appear normal.
+
+```{r echo=FALSE}
+h1 <- ggplot(aes(x = sulphates), data = wine) + 
+  geom_histogram(binwidth = 0.01) + 
+  
+  ggtitle("Red Wine")
+
+h2 <- ggplot(aes(x =  sulphates), data = winew) + 
+  geom_histogram(binwidth = 0.01) + 
+  
+  ggtitle("White Wine")
+
+grid.arrange(h1,h2,ncol = 2)
+
+```
+
+The distribution of potassium sulphate for both red and white wine appear positively skewed.
+
+# Univariate Analysis
+
+
+### What is the structure of your dataset?
+
+The datasets used contain 1599 observations of red wines, 4898 observations of white wines and 6497 observations total. The output 
+variable, quality, is an integer representing the quality of the wines observed from 0-10. However, there are no wines rated at
+a quality of less than 3 and no wines rated at a quality of greater than 9. For white wines, most wines observed are rated at a 
+quality of 6. For red wines, most wines observed are rated at a quality of 5. However, we must keep in mind that the difference in
+sample size could play a large role in this difference.
+
+Other observations:
+
+* The median % alcohol by volume is 10.20 for red wines and 10.40 for white wines
+* the median amount of volatile acidity in red wines is 0.5200 grams/decimiters cubed and 0.2600 grams/decimiters cubed in white wines
+* Most white wines are considered 'Dry' according to the reisling sugar guidlines
+* In total, about 25% of wines have a quality rating less than 5
+* The median amount of total sulfur dioxide is 38.00 milligrams/decimiters cubed for reds and 134.0 milligrams/decimiters cubed for whites 
+
+### What is/are the main feature(s) of interest in your dataset?
+
+I would like to see what physicochemical properties of wine impact the quality ratings of the wines sampled. I will try to predict quality
+using an OLS regression model. In the case study for this course, the instructor used the diamonds dataset to predict the price of diamonds, so I thought it would be interesting to do something similar here. I do not intend to show any causal relationships between quality and the physicochemical properties measured in the wine samples. The main regressor of interest is volatile acidity, because in the variables description provided with the dataset, the authors state that volatile acidity is, "the amount of acetic acid in wine, which at too high of levels can lead to an unpleasant, vinegar taste". Based on this information, I thought that volatile acidity would play the largest role in the assesment of quality, if there is any relationship between quality and the physicochemical properties at all.
+
+### What other features in the dataset do you think will help support your \
+investigation into your feature(s) of interest?
+
+Residual sugar, chlorides, total sulfur dioxide, and pH most likely impact the ratings of quality as well. All these variables will be 
+explored later in the dataset.
+
+### Did you create any new variables from existing variables in the dataset?
+
+Yes the scale of dryness to sweetness based on the Reisling sugar guidlines was added to the white wine dataset. Also, new variables were created to convert the variable 'quality' to both a numeric datatype and a factor datatype with 7 levels, for the sake of certain visualizations. For the linear model, the original (integer) variable 'quality' is used as the output variable.
+
+### Of the features you investigated, were there any unusual distributions? \
+Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+
+There was a variable 'X' which represented the row count of the dataset. This column was dropped because the R dataframe structure takes care of that for us. I also performed a vertical join on the two wine datasets, to create a dataset that accounts for every observation of wine. This was done to find general information about the data that is not specific to the color of the wines.
+
+********************************
+
+# Bivariate Plots Section
+
+
+
+```{r echo=FALSE, Bivariate_Plots, message=FALSE, warning=FALSE}
+
+ggplot(aes(x = sulphates, y = free.sulfur.dioxide), data = total) +
+  geom_point( alpha = 1/10) +
+  ylim(0,150)
+  
+
+```
+
+The varaibles description states that sulphates are, "a wine additive which can contribute to sulfur dioxide gas (S02) levels, wich acts as an antimicrobial and antioxidant", so I was interested to look at the relationship between sulphates and free sulfur dioxide ("free" refers to sulfur dioxide in gas form). However, it appears that the relationship is slightly negative, which is not what I would have expected. This as a disappointing find. In the plot above, the alpha parameter is set to 1/30. Sulfur dioxide is said to be undetectable in wine (with the exception of levels over 50 ppm) so I am curious wether or not there is a relationshiop between sulfur dioxide and quality.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ p1<- ggplot(aes(x = quality, y = total.sulfur.dioxide), data = wine) +
+  geom_point() +
+  scale_x_continuous(breaks = seq(3,8,1)) +
+  ggtitle("Red Wine")
+
+p2 <- ggplot(aes(x = quality, y = total.sulfur.dioxide), data = winew) +
+  geom_point() +
+  scale_x_continuous(breaks = seq(3,9,1)) +
+  ggtitle("White Wine")
+
+grid.arrange(p1,p2,ncol=2)
+
+```
+
+This scatter plot represents the relationship between quality and total sulfur dioxide. As you can see, there is a lot of variance in the data, so it is hard to see a relationship visualy. Perhaps it would be more useful to asses the relationship numerically. We will see the relationship between quality against total sulfur dioxide in the first regression table, but first lets look at some other plots.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ p1<- ggplot(aes(x = quality_fac, y = total.sulfur.dioxide), data = wine) +
+  geom_boxplot() +
+  #scale_x_continuous(breaks = seq(3,8,1)) +
+  ggtitle("Red Wine")
+
+p2 <- ggplot(aes(x = quality_fac, y = total.sulfur.dioxide), data = winew) +
+  geom_boxplot() +
+  #scale_x_continuous(breaks = seq(3,9,1)) +
+  ggtitle("White Wine")
+
+grid.arrange(p1,p2,ncol=2)
+
+```
+
+Boxplots offer a better visual representation of the relationship between quality and sulfur dioxide. You can see that the red wines rated with a quality of '5' has the most sulfur dioxide on average and the white wines rated with a quality of '3' have the most sulfur dioxide on average. The quartile range is so small for wines rated with a quality of '9' because there are only 5 such wines observed in the dataset.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+print("White Wine Total Sulfur Dioxide")
+by(winew$total.sulfur.dioxide, winew$quality, summary)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+print("Red Wine Total Sulfur Dioxide")
+by(wine$total.sulfur.dioxide, wine$quality, summary)
+
+```
+
+The tables above offer an numerical representation of the relationship between total sulfur dioxide and quality. As we can see agian, white wines have much higher levels of total sulfur dioxide. Could this be true because the process of fermenting white grapes is more prone to bacteria? It could also be related to the difference in the levels of volatile acidity. Before we explore volatile acidity more,
+lets look at a coefficient from a linear model.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ reg <-lm(formula = quality ~ total.sulfur.dioxide, data = total)
+ reg1 <-lm(formula = quality ~ I(total.sulfur.dioxide/1000), data = total)
+ 
+ stargazer(reg,reg1, se=list(cse(reg),cse(reg1)),
+           title = "Table 1.0", type = "text",
+           column.labels = c("sulfur dioxide in mg/", "sulfur dioxide in g"))            #CHANGE TO HTML WHEN KNITTING
+```
+
+Without holding any other variables constant, a 1 gram/dm^3 increase in total sulfur dioxide results in a 0.639 decrease in quality rating. However, the sulfur dioxide levels were converted to grams in order to more accurately compare the coefficients on sulfur dioxide vs volatile acidity(volatile acidity is mesured in grams), so it is unlikely that a whole gram of sulfur dioxide will be present in a wine sample. In fact, the max amount of sulfur dioxide present in a wine sample is 440 mg/dm^3. That said, a one mg/dm^3 increase in sulfur dioxide results in a 0.001 decrease in quality rating. This may confirm the idea that sulfur dioxide is more or less undetectable in wine. Though, without holding other variables constant, we cannot rule out the bias from omitting relavent variables, so any conclusions would be premature. Looking at the effect of a one unit change on quality output may not be the best way to investigate the relationships, so lets look at a few more visualizations to get a better sense of what's goin on.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ p1<- ggplot(aes(x = quality, y = volatile.acidity), data = wine) +
+  geom_point() +
+  scale_x_continuous(breaks = seq(3,8,1)) +
+  ggtitle("Red Wine")
+
+p2 <- ggplot(aes(x = quality, y = volatile.acidity), data = winew) +
+  geom_point() +
+ scale_x_continuous(breaks = seq(3,9,1)) +
+  ggtitle("White Wine")
+
+grid.arrange(p1,p2,ncol=2)
+
+```
+
+Another scatter plot with quality on the x-axis. Again, this is not the best visual representation of the relationship. It would likely be more useful to look at some box plots, so lets do that.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ p1<- ggplot(aes(x = quality_fac, y = volatile.acidity), data = wine) +
+  geom_boxplot() +
+  #scale_x_continuous(breaks = seq(3,8,1)) +
+  ggtitle("Red Wine")
+
+p2 <- ggplot(aes(x = quality_fac, y = volatile.acidity), data = winew) +
+  geom_boxplot() +
+  #scale_x_continuous(breaks = seq(3,9,1)) +
+  ggtitle("White Wine")
+
+grid.arrange(p1,p2,ncol=2)
+
+```
+
+For red wine, you can see a consistant decrease of the median volatile acidity levels as quality increases with the exception of the increase from 7 to 8. For white wines, the median levels of volatile acidity bounce around much more than for red wines. It could be that theres a relationship between volatile acidity and variables that are more prevelent in white wine, such as residual sugar. Before we explore other variables, lets look at another regression table.
+
+```{r echo = F, message=FALSE, warning=FALSE}
+ reg2 <-lm(formula = quality ~ volatile.acidity, data = total)
+ reg3 <-lm(formula = quality ~ volatile.acidity, data = winew)
+ reg4 <-lm(formula = quality ~ volatile.acidity, data = wine)
+ stargazer(reg2,reg3,reg4,
+           se=list(cse(reg2),cse(reg3),cse(reg4)),
+           title = "Table 1.1", type = "text",
+           column.labels = c("all wines", "white wine", "red wine")
+           )            #CHANGE TO HTML WHEN KNITTING
+```
+
+A one g/dm^3 increase in volatile acidity results in a 1.711 decrease in quality rating for white wines without holding any other variables constant. Additionally, a one g/dm^3 increase in volatile acidity results in a 1.761 decrease in quality rating without holding any other variables constant. To compare the impact of sulfur dioxide to the impact of volatile acidity, I converted sulfur dioxide to grams/dm^3. Sulfur dioxide had a coefficient of 0.639, so the impact of volatile acidity *appears* greater, not to mention the fact that a whole g of sulfur dioxide is unlikely to be present in any sample. Another method would have been to standardize the coefficients and compare them, but I figured since it is such a simple conversion that this comparison would be sufficient to gain some insight.
+
+As I mentioned earlier, there could be a relationship between volatile acidity and residual sugar. Lets look at some plots to investigate this question. But first, I realized later in my multivariate analysis that this coefficient may be very misleading. It is very unlikely that the volatile acidity would increase by one gram, as the maximum amount of volatile acidity recorded is 1.58, and the standard deviation is 0.16. To compare the two variables, I think it best ot standardize the coefficients. 
+
+```{r echo = F}
+ reg11 <-lm(formula = quality ~ volatile.acidity + total.sulfur.dioxide, 
+            data = wine)
+ reg12 <-lm(formula = quality ~ volatile.acidity + total.sulfur.dioxide, 
+            data = winew)
+ stargazer(reg11,reg12,
+           se=list(cse(reg11),cse(reg12)),
+           title = "Table 1.2", type = "text",
+           column.labels = c("white wine", "red wine")
+           )            #CHANGE TO HTML WHEN KNITTING
+```
+
+```{r echo = FALSE}
+print("Red wine")
+lm.beta(reg11)
+```
+
+```{r echo = FALSE}
+print("White wine")
+lm.beta(reg12)
+```
+
+A standard deviation increase in volatile acidity results in a 0.38 decrease in quality rating for red wine and a 0.18 decrease in quality rating for white wine.A standard deviation increase in total sulfur dioxide results in a 0.156 decrease in quality rating for red wine and a 0.159 decrease in quality rating for white wine. Now lets look at some plots to get a sense of the relationship I was curious about earlier. 
+
+*********************************************************
+
+```{r echo=F}
+r <- ggplot(aes(x=residual.sugar, y = volatile.acidity), data = wine) +
+  geom_point()
+w <- ggplot(aes(x=residual.sugar, y = volatile.acidity), data = winew) +
+  geom_point()
+grid.arrange(r,w,ncol = 2)
+```
+
+```{r echo=F, warning=FALSE, message=FALSE}
+r <- ggplot(aes(x=residual.sugar, y = volatile.acidity), data = wine) +
+  geom_point(alpha = 1/20) + 
+ ylim(0,1.25) + 
+  ggtitle("Red wine")
+
+
+w <- ggplot(aes(x=residual.sugar, y = volatile.acidity), data = winew) +
+  geom_point(alpha = 1/20) +
+ ylim(0,0.95) + 
+  ggtitle("White wine")
+  
+
+grid.arrange(r,w,ncol = 2)
+```
+
+There is a lot of noise in the plots above, so the alpha parameter was set to 1/20. This makes the relationship somewhat easier to see, but there is a lot of variance in the data. But speaking of sugar, I wonder how the reisling sugar guidlines relate to quality ratings.
+
+```{r echo=FALSE}
+ggplot(aes(x = scale, y = quality), data = winew) + 
+  geom_jitter(alpha=0.2) +
+scale_y_continuous(breaks = seq(3,9,1))
+```
+
+
+```{r echo=F}
+print("Quality by reisling scale")
+by(winew$quality, winew$scale, summary)
+```
+
+The median quality rating for dry, medium dry, and medium sweet is 6. The median quality rating for sweet is 5. I know that when fermenting wine, sugar is converted to alcohol (put simply). So I wonder how residual sugar relates to alcohol content. Obviously, the residual sugar has nothing to do with the sugar converted into alcohol, but there could be a relationship between residual sugar and total sugar present before the fermentation process.
+
+```{r echo = FALSE}
+ggplot(aes(x = residual.sugar, y = alcohol), data = total) +
+  geom_point() + 
+  geom_smooth(method = "lm", formula = y~x)
+
+```
+
+Assuming that more residual sugar present in the wine sample means less sugar converted to alcohol, this relationship makes sense. Lets see if the relationship holds when looking at the alcohol content of the reisling sugar guidlines scale.
+
+```{r echo=F}
+
+ggplot(aes(x=scale, y = alcohol), data = winew) +
+  geom_boxplot() 
+  
+```
+
+```{r echo=F}
+print("percent alcohol by reisling scale")
+by(winew$alcohol, winew$scale, summary)
+```
+
+Wines rated as 'dry' according to the reisling scale have the highest median alcohol content. At first I thought the oposite would be true, but then I thought about it a little more. Perhaps in the wines rated as 'dry' have the most sugar converted to alcohol during the fermentation process. However, the reisling scale also relies on acid ratios an pH, so its hard to tell.
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the \
+investigation. How did the feature(s) of interest vary with other features in \
+the dataset?
+
+The bivariate analysis revealed some interesting trends. The relationship between sulphates and sulfur dioxide was much weaker than I expected. The variables description led me to believe that the realtionship would be strong. Additionally, the impact of volatile acidity on quality output appears greater than the impact of total sulfur dioxide on quality output, especially for red wine. As I mentioned earlier, we should add some other variables to the linear model in order to get a clearer insight on what is actually going on. Lastly, the median quality rating does not vary greatly between the different reisling sugar guidline categories.  
+
+
+
+### Did you observe any interesting relationships between the other features \
+(not the main feature(s) of interest)?
+
+Yes. An interesting find for me was the variance in the median alcohol content across the different reisling sugar guidline categories. I found it interesting that wines marked as "Dry" had the highest median alcohol content, by 0.8 percentage points. The median alcohol content of wines marked as "Dry" is greater than the median alcohol content of wines marked as "Sweet" by 1.25 percentage points.
+
+### What was the strongest relationship you found?
+
+So far, the strongest relationship between quality output and the pysicochemical properties has been the relationship between volatile acidity and quality. I initially thought that the impact of volatile acidity would be much greater than that of total sulfur dioxide, and a first glance at the coefficients certainly makes it seem so. For red wine, when the coefficients were standardized, volatile acidity had over twice the impact than total sulfur dioxide. For white wine, however, the difference was much less extreme. I'm sure there are relationships between some of the chemical properties that are very strong, such as the relationship between free sulfur dioxide and total sulfur dioxide, or citric acid and volatile acidity. However, including each of these in a linear model could result in issues with multicolinearity. It would be more useful to look at relationships between chemical properties that are not so obvious (volatile acidity against residual sugar) and relationships between chemical properties and quality output.
+********************************************
+
+# Multivariate Plots Section
+
+
+```{r echo=FALSE, Multivariate_Plots}
+ggplot(aes(x = quality, y = volatile.acidity),
+       data = winew) +
+  geom_line(aes(color =scale), stat = 'summary', fun.y = median) +
+  scale_x_continuous(breaks = seq(3,9,1)) + 
+  ggtitle("Median volatile acidity by quality and reisling scale")
+
+```
+
+```{r echo=FALSE}
+ggplot(aes(x = quality, y = volatile.acidity),
+       data = winew) +
+  geom_line(aes(color =scale), stat = 'summary', fun.y = mean) +
+  scale_x_continuous(breaks = seq(3,9,1)) +
+  geom_line(stat = "summary", fun.y = mean, linetype = 2) +
+  ggtitle("Mean volatile acidity by quality and reisling_scale(w grand mean)")
+```
+
+For quality ratings of 4,5, and 6 wines rated as 'Dry' seem to overlap the grand mean. Wines rated 'sweet' and with a quality of 6 have more volatile acidity than average. Perhaps the level of sweetnes tends to mask the taste of volatile acidity. This visual is interesting in that there is a consistent decrease in volatile acidity as quality increases, then seems to spike back up at the end. However, for wines rated at a quality of 7, 'sweet' wines appear to have very low levels of volatile acidity.
+
+The grand mean follows a peculiar pattern, spiking from wines rated with a quality of 3 to wines rated 4, then decreasing from 4 - 6, and steadily increasing from 7-9. I expected to see a more steady decrease as quality increases.
+
+```{r echo=FALSE, out.height=600, out.width=1200}
+ggplot(aes(x = as.factor(quality), y = volatile.acidity),
+       data = winew) +
+  geom_boxplot() +
+  facet_wrap(~scale) +
+  xlab("Quality") +
+  ylab("Volatile acidity")
+ 
+  
+ 
+               
+```
+
+This plot represents the same variables as the line plot , but the data are displayed in box plots faceted by reisling scale. This gives us some useful information, although the line plots are better for a general sense of the data. We can see that there are no wines rated 'sweet' with a quality of 9. Wines rated 'Dry' and 'medium dry' tend to have the highest levels of volatile acidity for each quality category, with the exception of 6. 
+
+```{r echo=FALSE}
+ggplot(aes(x = quality, y = volatile.acidity),
+       data = winew) +
+  geom_jitter(alpha = 0.5 , aes(color = scale)) +
+  scale_colour_brewer() +
+  
+  scale_x_continuous(breaks = seq(3,9,1)) +
+  theme_dark()
+               
+```
+
+The same plot as above but with added jitter and an alpha parameter of 1/10.
+
+```{r echo=FALSE}
+ggplot(aes(x = residual.sugar, y = volatile.acidity ), data = winew) + 
+  geom_point(alpha = 0.5, aes(color = scale)) +
+  scale_colour_brewer() +
+  scale_x_continuous(breaks = seq(0.6,66,10)) +
+  theme_dark()
+
+```
+
+Here is another visual exploring the relationship between residual sugar and volatile acidity, this time throwing the reisling sugar guidlings into the mix. As we would expect, you can see than the reisling scale gets sweeter as residual sugar increases. This is simply because the residual sugar is built in the the function that generated the reisling scale variable. There are some wines rated medium sweet that have lower amounts of residual sugar, and that is likely caused by the shift due to pH. Now that we have seen some interesting visuals,lets look at some numerical relationships with a multivariate regression. 
+
+********************************************************************************************************
+
+```{r echo = FALSE, warning=FALSE}
+ reg5 <-lm(formula = quality ~ volatile.acidity + total.sulfur.dioxide , 
+           data = wine)
+ 
+reg6 <-lm(formula = quality ~ volatile.acidity + total.sulfur.dioxide + 
+            residual.sugar + alcohol , data = wine)
+ 
+reg7 <-lm(formula = quality ~  volatile.acidity   + total.sulfur.dioxide + 
+             residual.sugar + alcohol + chlorides + pH , data = wine)
+ 
+ stargazer(reg5,reg6,reg7,
+           se=list(cse(reg5),cse(reg6),cse(reg7)),
+           title = "Table 1.3 (Red Wine)", type = "text",
+           column.labels = c("Reg 1", "Reg 2", "Reg 3"))            #CHANGE TO HTML WHEN KNITTING
+```
+
+For red wine, a 1 g/dm^3 increase in volatile acidity results in a 1.245 decrease in quality rating, all else equal. The impact of sulfur dioxide does not seem to change much when controlling for other properties; a 1 mg/dm^3 increase in total sulfur dioxide results in a .002 decrease in quality output, holding the other variables constant. A 1 percentage point increase in alcohol by volume results in a 0.313 increase in quality output, ceteris paribus. The coefficent for residual sugar is not significantly different than zero. The coefficient for chlorides is only significant at the 10 percent level. Lastly, a 1 unit increase in pH results in a 0.491 decrease in quality output, holding relevent variables constant. I became worried that including pH and volatile acidity would result in issues with multicolinearity, but I tested their pearsons r correlation, and the correlation was 0.26 (1 being perfectly colinear).
+
+
+
+```{r echo = F, warning=FALSE}
+ reg8 <-lm(formula = quality ~ volatile.acidity + total.sulfur.dioxide,  
+           data = winew)
+ 
+reg9 <-lm(formula = quality ~  volatile.acidity   + total.sulfur.dioxide + 
+            residual.sugar + alcohol , data = winew)
+
+reg10 <-lm(formula = quality ~  volatile.acidity + total.sulfur.dioxide  + 
+             residual.sugar + alcohol + chlorides + pH , data = winew)
+ 
+stargazer(reg8,reg9,reg10,
+           se=list(cse(reg8),cse(reg9),cse(reg10)),
+           title = "Table 1.4 (White Wine)", type = "text",
+           column.labels = c("reg 1", "reg 2", "reg 3"))            #CHANGE TO HTML WHEN KNITTING
+```
+
+Unlike red wines, the coefficient for residual sugar is statisticaly significant at the 1 percent level. Also unlike red wines, when holding other relative variables constant, the effect of total sulfur dioxide is not significantly different than zero. A 1 g/dm^3 increase in volatile acidity results in a 2.093 decrease in quality output. A one g/dm^3 increase in residual sugar results in a 0.027 increase in quality output, all else equal. Lastly, a one percentage point increase in alcohol by volume results in a 0.337 increase in quality output, quite similar to red wine, all else equal.
+
+I would like to point out that in the two regression tables above, the units and ranges of values vary so greatly, that it may be more useful to standardize the coefficients again. This will alow us to look at the impact of a standard deviation change for each variable, rather than a unit change. You can find the outputs of the standardized variables (from the third regression in each table) below.
+
+```{r echo=FALSE}
+print("Red wine")
+lm.beta(reg7)
+```
+
+ For red wine, a standard deviation change in alcohol appears to have the highest impact on quality output, almost double that of volatile acidity, which comes in second place.
+ 
+```{r echo = FALSE}
+print("White wine")
+lm.beta(reg10)
+```
+
+For white wine, a standard deviation change in alcohol has an even higher impact than it does for red wine, more than double the impact of volatile acidity, which again comes in second place. Residual sugar appears to have an enormously larger impact for white wine than it does for red wine when standardizing the coefficients.
+
+```{r echo = FALSE}
+white_wine = data.frame(volatile.acidity = 0.270, 
+                        total.sulfur.dioxide = 170.0, residual.sugar = 20.70,
+                        alcohol = 8.8,
+                        chlorides = 0.045, pH = 3.00)
+print("White Wine Prediction")
+round(predict(reg10,white_wine))
+```
+
+```{r echo= FALSE}
+red_wine = data.frame(volatile.acidity = 0.700, total.sulfur.dioxide = 34, 
+                      residual.sugar = 1.90, alcohol = 9.4,
+                        chlorides = 0.076, pH = 3.51)
+print("Red Wine Prediction")
+round(predict(reg7,red_wine))
+
+```
+When the output is rounded, the prediction is spot on. I created a data frame for red wine and white wine based on actual data in the original datasets, and plugged in those actual values into the last regression in each table (1.2,1.3). When rounded, the output matched the value under the quality column exactly.
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the \
+investigation. Were there features that strengthened each other in terms of \
+looking at your feature(s) of interest?
+
+I was suprised that volatile acidity does not appear to have the largest impact on quality output. For red wine, when holding other variables constant, the impact of volatile acidity appears more positeve(although still negative, of course). This implies something about the relationship of the other relative variables to volatile acidity, which we will look at more in the final plots section. For white wine the opposite is true, controlling for other relevant variables causes volatile acidity to appear more negative. This is strange, but again implies something tricky going on with omitted variable bias. It may have to do with the fact that residual sugar is statistically significant for white wine but not for red wine.
+
+
+### Were there any interesting or surprising interactions between features?
+
+Yes, when standardizing the coefficients, alcohol appears to have the greatest impact on quality output, with a one standard deviation change resulting in a 0.52 increase in quality output for white wines and a 0.41 quality increase in quality output for red wines, all else equal. I certainly expected alcohol to have and impact, but I thought that the effect of pH and volatile acidity would be stronger. Volatile acidity comes in second place, which seems to confirm the idea that too much volatile acidity can result in a nasty vinegar taste. It is probably true that volatile acidity in lower levels is more or less undetectable, but in high doses can result in poorly tasting wine.
+
+### OPTIONAL: Did you create any models with your dataset? Discuss the \
+strengths and limitations of your model.
+
+Yes, I utilized a linear model with quality as the output variable and six regressors. I want to be clear that none of the results should be seen as facts. I am not a PhD in statistics; I do not even have a masters degree. I am familier with regression models, but my knowledge is limited to the undergraduate level. One limitation is that linear regression assumes that the different values of the response variable are homosketastic, when it reality the errors are almost always heterosketastic. I attempt to correct this assumption calculating robust standard errors, but there are other techniques I could have utilized to correct for this (such as using a log model). The linear model also assumes that predictor variables are free of measurement errors, and that assumption is also not very realistic in practice. Also, I left out a few predictor variables from the datasets that may or may not have been relevant to quality output, and some that I thought may have resulted in issues with multicolinearity (i.e. including fixed acidity and volatile acidity, or citric acid and volatile acidity). It may have been useful to include more variables and experiment with more robust regressions, but the purpose of this project was not solely to provide a strong mathematical model. The purpose was also to provide strong visuals to explore certain anamolies in the data, and to be curious about the data. Another limitation is that the units of the variables vary widely. I attempt to correct for this issue by standardizing the coefficients, but there are fundamental limitations to that technique as well. For example, a standard deviation change in alcohol content may be difficult to interpret comparatively. Lastly, the quality variable is based on sensory data, which is very subjective.
+
+------
+
+# Final Plots and Summary
+
+
+
+### Plot One
+```{r echo=FALSE, Plot_One, out.height=600, out.width=1200}
+
+
+ggplot(winew, aes(as.factor(quality))) +
+  geom_bar(aes( fill = scale)) +
+  xlab("Quality") +
+  ylab("COUNT") +
+  ggtitle("Quality distribution with reisling scale")+
+  theme_classic()
+
+       
+
+ 
+
+
+
+```
+
+
+
+### Description One
+This plot displays the quality distribution of the white wine dataset, with the reisling sugar guidlines factored in. Wines rated as 'Dry'
+have the highest frequency for each quality level. We explored the relationship between the reisling scale and residual sugar earlier, but I wonder how that relationship relates to quality output.
+
+
+### Plot Two
+```{r echo=FALSE, Plot_Two, out.height=600, out.width=1200}
+total$alcohol_levels <- cut(total$alcohol, 
+breaks = c(8,9.5,10.30,11.30,14.90), labels = c("Low", "Moderate", 
+                                                "Above average", 
+                                  "High"), right = FALSE)
+
+ggplot(aes(x = quality, y = residual.sugar),
+       data = subset(total, !is.na(alcohol_levels))) +
+  geom_line(aes(color =alcohol_levels), stat = 'summary', fun.y = mean) +
+  scale_x_continuous(breaks = seq(3,9,1)) +
+  geom_line(stat = "summary", fun.y = mean, linetype = 2) +
+  ggtitle("Mean residual sugar by quality and alcohol levels(w grand mean)") +
+  xlab("Quality") +
+  ylab("residual sugar (g / dm^3)")+
+  theme_classic()
+
+```
+
+### Description Two
+
+Wines with relatively low alcohol content have the highest amount of residual sugar at every quality level except for wines rated with a quality of 3. Again, this is likely because less sugar is converted to alcohol during the fermentation process. Wines with a moderate alcohol content spike above average at a quality of 6-8. Wines with a relatively high alcohol contain remain below the average amount of residual sugar across all quality levels. Wines with above average alcohol content (but not high) remain below the average amount of residual sugar from qualities of 4-8, but spike far above average for wines rated with a quality of 9. This is an interesting anomoly. 
+
+### Plot Three
+```{r echo=FALSE, Plot_Three, out.height=700, out.width=1500 }
+ggplot(aes(x = sulphates, y = total.sulfur.dioxide), data = total) +
+  geom_jitter( aes(color= as.factor(quality))) +
+         geom_smooth(method = lm, formula = y~x) +
+  scale_colour_brewer(name = "Quality") +
+  xlab("potassium sulphate - g / dm^3")+
+  ylab("total sulfur dioxide (mg / dm^3)")+
+  ggtitle("total sulfur dioxide by sulphates and quality") +
+  theme_dark()
+
+
+
+  
+```
+
+### Description Three
+
+Again we explore the relationship between sulphates and total sulfur dioxide, this time coloring by quality rating. There seems to be a lot of variance in the quality ratings. There are many higher-quality points with a relatively low amount of sulphates and a relatively high amound of sulfur dioxide, but there are also a lot of higher-quality points with a relatively low level of sulfur dioxide and a higher amount of sulphates. Perhaps in good wine, sulphates and sulfur dioxide are substitutes (you would not want high levels of both, but you would want one or the other).
+
+*********************************************************
+
+# Reflection
+
+Exploring the relationships between quality ratings and the physicochemical properties of wine was full of suprises and challenges. At first glance, it appeared that volatile acidity had a much larger impact than it actually does. The issue was that volatile acidity was measured in g/dm^3, but only 2% of the wines observed had volatile acidity measured larger than 0.78g/dm^3, so looking at a one unit increase for volatile acidity was not useful. 
+
+Another challenge was figuring out what variable relationships to expore. In the variables decription text file provided with the datasets, the authors explicitely state, "we are not sure if all input variables are relevant." The unkown relevance of variables in a dataset is very common in the real world, so it was interesting to see if I could build a model that would predict wine quality somewhat accurately.
+
+One aspect that I think went well was the quality predictions based on the linear regressions for white wine and red wine respectively. When rounding the output, the results were accurate. Also, I am glad that I ended up standardizing the coefficients, because I was finding every excuse not to originally.
+
+I have several ideas for further study. First, I noticed that the authers of the original study used a support vector machine regression technique, and I thought about giving that a try here, but I did not want to go over my head. However, I also noticed that we study svm regression later in this course, so it will be interesting to revisit this data once I learn more. Also, It would be interesting to include log model and to include more variables. Using a log model allows us to view the unit change in x in terms of percent rather than a unit change in y. 

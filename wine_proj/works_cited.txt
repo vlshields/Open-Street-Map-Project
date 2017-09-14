@@ -1,0 +1,23 @@
+
+
+Works cited and acknowledgements
+
+
+
+Here is the citation again requested by the authors of the original study:
+
+P. Cortez, A. Cerdeira, F. Almeida, T. Matos and J. Reis. 
+  Modeling wine preferences by data mining from physicochemical properties.
+  In Decision Support Systems, Elsevier, 47(4):547-553. ISSN: 0167-9236.
+
+The data can be found here: 
+[@Elsevier] http://dx.doi.org/10.1016/j.dss.2009.05.016
+ [Pre-press (pdf)] http://www3.dsi.uminho.pt/pcortez/winequality09.pdf
+ [bib] http://www3.dsi.uminho.pt/pcortez/dss09.bib
+
+
+ Thank you to the Udacity Nanodegree program and all the instructors involved. I would not have been able to make many of the visualations and the work would have gone much more slowly if it were not for the fantastic instruction.
+
+ The scale_IRF function written in the first cell block was inspired by a post in the udacity forums. Someone was asking how to apply that function they wrote, and I thought the idea of incorporating the reisling sugar guidlines into the dataset was a really good one. I figured since the post was already publically available in the DAND forums, that it would be alright to borrow the idea. I want to be very transparent about this. I did have to modify the function, because the logic in the function posted on the forum was incorrect, but I would never have had the idea if I did not see that post. Here is a link to that post:
+
+ https://discussions.udacity.com/t/apply-function-for-new-variable-in-white-wine-dataset/350842 
